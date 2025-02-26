@@ -1,12 +1,18 @@
-from fastapi import FastAPI, HTTPException, logger
+from dotenv import load_dotenv
+from fastapi import FastAPI, HTTPException, Depends
 from typing import List
-from schemas import Task, TaskCreate, TaskStatus, Priority
+import models, database, schemas
 from datetime import datetime
+from sqlalchemy.orm import Session
+
+# load env vars
+load_dotenv()
+
+
+# create tables
+models.Base.metadata.create_all(bind=database.engine)
 
 app = FastAPI(title="Task Management API")
-
-tasks = {}
-task_id_counter = 1
 
 
 @app.get("/")
@@ -14,43 +20,67 @@ async def root():
     return {"message": "hi there from fast api!"}
 
 
-@app.post("/tasks/", response_model=Task)
-async def create_task(task: TaskCreate):
-    global task_id_counter
-    new_task = Task(id=task_id_counter, **task.model_dump())
-
-    tasks[task_id_counter] = new_task
-    task_id_counter += 1
-    return new_task
+@app.get("/tasks/", response_model=List[schemas.Task])
+async def read_tasks(db: Session = Depends(database.get_db)):
+    tasks = db.query(models.Task).all()
+    return tasks
 
 
-@app.get("/tasks/", response_model=List[Task])
-async def read_tasks():
-    return list(tasks.values())
+@app.post("/tasks/", response_model=schemas.Task)
+async def create_task(task: schemas.TaskCreate, db: Session = Depends(database.get_db)):
+    db_task = models.Task(
+        title=task.title,
+        description=task.title,
+        status=models.TaskStatus[task.status.name],
+        due_date=task.due_date,
+        priority=models.Priority[task.priority.name],
+    )
+    db.add(db_task)
+    db.commit()
+    db.refresh(db_task)
+
+    return db_task
 
 
-@app.get("/tasks/{task_id}", response_model=Task)
-async def read_task(task_id: int):
-    if task_id not in tasks:
+@app.get("/tasks/{task_id}", response_model=schemas.Task)
+async def read_task(task_id: int, db: Session = Depends(database.get_db)):
+    task = db.query(models.Task).filter(models.Task.id == task_id).first()
+    if task is None:
+        raise HTTPException(status_code=404, detail="Task not found")
+    return task
+
+
+@app.put("/tasks/{task_id}", response_model=schemas.Task)
+async def update_task(
+    task_id: int, task: schemas.TaskCreate, db: Session = Depends(database.get_db)
+):
+    db_task = db.query(models.Task).filter(models.Task.id == task_id).first()
+    if db_task is None:
         raise HTTPException(status_code=404, detail="Task not found")
 
-    return tasks[task_id]
+    # update attributes
+    for key, value in task.model_dump().items():
+        print(f"key {key} - value {value}")
+        if key in ["status", "priority"] and value is not None:
+            # handle enum conversion
+            if key == "status":
+                value = models.TaskStatus[value.name]
+            elif key == "priority":
+                value = models.Priority[value.name]
+
+        setattr(db_task, key, value)
+
+    db.commit()
+    db.refresh(db_task)
+    return db_task
 
 
-@app.put("/tasks/{task_id}", response_model=Task)
-async def update_task(task_id: int, task: TaskCreate):
-    if task_id not in tasks:
+@app.delete("/tasks/{task_id}")
+async def delete_task(task_id: int, db: Session = Depends(database.get_db)):
+    db_task = db.query(models.Task).filter(models.Task.id == task_id).first()
+    if db_task is None:
         raise HTTPException(status_code=404, detail="Task not found")
 
-    updated_task = Task(id=task_id, **task.model_dump())
-    tasks[task_id] = updated_task
-    return updated_task
-
-
-@app.delete("tasks/{task_id}")
-async def delete_task(task_id: int):
-    if task_id not in tasks:
-        raise HTTPException(status_code=404, detail="Task not found")
-
-    del tasks[task_id]
+    db.delete(db_task)
+    db.commit()
     return {"message": "Task deleted successfully"}

@@ -15,3 +15,10 @@ wheels/
 
 # Logs
 logs/
+
+# docker
+/pgdata/*
+!pgdata/.gitkeep
+
+# env vars
+.env
