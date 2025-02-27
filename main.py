@@ -1,5 +1,6 @@
 from dotenv import load_dotenv
 from fastapi import FastAPI, HTTPException, Depends, status
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.security import OAuth2PasswordRequestForm
 from typing import List
 import models
@@ -7,8 +8,11 @@ import database
 import schemas
 import security
 import auth
-from datetime import datetime, timedelta
+from datetime import timedelta
 from sqlalchemy.orm import Session
+
+from exceptions import TaskAPIException, task_exception_handler, TaskNotFoundException
+from middleware import log_requests_middleware
 
 # load env vars
 load_dotenv()
@@ -18,6 +22,31 @@ load_dotenv()
 models.Base.metadata.create_all(bind=database.engine)
 
 app = FastAPI(title="Task Management API")
+
+
+# Configure CORS
+origins = [
+    "http://localhost",
+    # the backend
+    "http://localhost:8080",
+    # the frontend
+    "http://localhost:3000",
+    # any other origin
+]
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=origins,
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+# Register exception handler
+app.add_exception_handler(TaskAPIException, task_exception_handler)
+
+# Add request logging middleware
+app.middleware("http")(log_requests_middleware)
 
 
 # Authentication endpoints
@@ -105,7 +134,7 @@ async def create_task(
 async def read_task(task_id: int, db: Session = Depends(database.get_db)):
     task = db.query(models.Task).filter(models.Task.id == task_id).first()
     if task is None:
-        raise HTTPException(status_code=404, detail="Task not found")
+        raise TaskNotFoundException(task_id=task_id)
     return task
 
 
@@ -115,7 +144,7 @@ async def update_task(
 ):
     db_task = db.query(models.Task).filter(models.Task.id == task_id).first()
     if db_task is None:
-        raise HTTPException(status_code=404, detail="Task not found")
+        raise TaskNotFoundException(task_id=task_id)
 
     # update attributes
     for key, value in task.model_dump().items():
@@ -138,7 +167,7 @@ async def update_task(
 async def delete_task(task_id: int, db: Session = Depends(database.get_db)):
     db_task = db.query(models.Task).filter(models.Task.id == task_id).first()
     if db_task is None:
-        raise HTTPException(status_code=404, detail="Task not found")
+        raise TaskNotFoundException(task_id=task_id)
 
     db.delete(db_task)
     db.commit()
