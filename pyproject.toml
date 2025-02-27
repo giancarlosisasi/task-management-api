@@ -5,10 +5,14 @@ description = "a simple task management api created using fastapi"
 readme = "README.md"
 requires-python = ">=3.13"
 dependencies = [
-    "alembic==1.4.1",
+    "alembic==1.14.1",
     "fastapi[standard]==0.115.8",
+    "passlib[bcrypt]==1.7.4",
+    "psycopg2>=2.9.10",
     "psycopg2-binary>=2.9.10",
     "python-dotenv==1.0.0",
+    "python-jose[cryptography]==3.4.0",
+    "python-multipart===0.0.20",
     "ruff==0.9.7",
     "sqlalchemy==2.0.38",
     "uvicorn==0.34.0",

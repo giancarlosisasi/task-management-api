@@ -1,8 +1,13 @@
 from dotenv import load_dotenv
-from fastapi import FastAPI, HTTPException, Depends
+from fastapi import FastAPI, HTTPException, Depends, status
+from fastapi.security import OAuth2PasswordRequestForm
 from typing import List
-import models, database, schemas
-from datetime import datetime
+import models
+import database
+import schemas
+import security
+import auth
+from datetime import datetime, timedelta
 from sqlalchemy.orm import Session
 
 # load env vars
@@ -13,6 +18,55 @@ load_dotenv()
 models.Base.metadata.create_all(bind=database.engine)
 
 app = FastAPI(title="Task Management API")
+
+
+# Authentication endpoints
+@app.post("/token", response_model=schemas.Token)
+async def login_for_access_token(
+    form_data: OAuth2PasswordRequestForm = Depends(),
+    db: Session = Depends(database.get_db),
+):
+    user = auth.authenticate_user(db, form_data.username, form_data.password)
+    if not user:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Incorrect email or password",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+    access_token_expires = timedelta(minutes=security.ACCESS_TOKEN_EXPIRE_MINUTES)
+    access_token = security.create_access_token(
+        data={
+            "sub": user.email,
+        },
+        expires_delta=access_token_expires,
+    )
+    return {"access_token": access_token, "token_type": "bearer"}
+
+
+@app.post("/users/", response_model=schemas.User)
+async def create_user(user: schemas.UserCreate, db: Session = Depends(database.get_db)):
+    db_user = db.query(models.User).filter(models.User.email == user.email).first()
+    if db_user:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST, detail="Email already registered"
+        )
+
+    hashed_password = security.get_password_hash(user.password)
+    db_user = models.User(email=user.email, hashed_password=hashed_password)
+    db.add(db_user)
+    db.commit()
+    db.refresh(db_user)
+    return db_user
+
+
+@app.get("/users/", response_model=List[schemas.User])
+async def get_all_users(
+    db: Session = Depends(database.get_db),
+    _: models.User = Depends(auth.get_current_user),
+):
+    db_users = db.query(models.User).all()
+
+    return db_users
 
 
 @app.get("/")
@@ -26,14 +80,19 @@ async def read_tasks(db: Session = Depends(database.get_db)):
     return tasks
 
 
-@app.post("/tasks/", response_model=schemas.Task)
-async def create_task(task: schemas.TaskCreate, db: Session = Depends(database.get_db)):
+@app.post("/tasks/", response_model=schemas.TaskWithUser)
+async def create_task(
+    task: schemas.TaskCreate,
+    db: Session = Depends(database.get_db),
+    current_user: models.User = Depends(auth.get_current_user),
+):
     db_task = models.Task(
         title=task.title,
         description=task.title,
         status=models.TaskStatus[task.status.name],
         due_date=task.due_date,
         priority=models.Priority[task.priority.name],
+        user_id=current_user.id,
     )
     db.add(db_task)
     db.commit()
